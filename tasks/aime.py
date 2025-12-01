@@ -1,6 +1,6 @@
 """
 AIME25评测任务：American Invitational Mathematics Examination 2025
-这是一个数学竞赛数据集，包含需要数值答案的数学问题
+这是一个数学竞赛数据集，包含需要数值答案的数学问题，实现了对aime的评测
 """
 
 import re
