@@ -16,13 +16,14 @@ import torch
 import torch.distributed as dist
 
 from nanochat.common import compute_init, compute_cleanup, get_dist_info, print0, autodetect_device_type
-from nanochat.checkpoint_manager import load_model
+from nanochat.checkpoint_manager import load_model, load_custom_model
 from nanochat.engine import Engine
 
 from tasks.humaneval import HumanEval
 from tasks.mmlu import MMLU
 from tasks.arc import ARC
 from tasks.gsm8k import GSM8K
+from tasks.aime import AIME
 from tasks.spellingbee import SpellingBee
 
 # -----------------------------------------------------------------------------
@@ -34,7 +35,6 @@ def run_generative_eval(task_object, tokenizer, model, engine, num_samples, max_
     device = model.get_device()
 
     num_problems = len(task_object) if max_problems is None else min(len(task_object), max_problems)
-
     # Run the evaluation
     num_passed, total = 0, 0
     for i in range(ddp_rank, num_problems, ddp_world_size):
@@ -167,9 +167,11 @@ def run_chat_eval(task_name, model, tokenizer, engine,
         'ARC-Challenge': partial(ARC, subset="ARC-Challenge", split="test"),
         'GSM8K': partial(GSM8K, subset="main", split="test"),
         'SpellingBee': partial(SpellingBee, size=256, split="test"),
+        'AIME': partial(AIME, subset="main", split="test"),
     }[task_name]
     task_object = task_module()
     # Run the evaluation
+    ##判断任务类型
     if task_object.eval_type == 'generative':
         acc = run_generative_eval(task_object, tokenizer, model, engine, num_samples, max_new_tokens, temperature, top_k, max_problems=max_problems)
     elif task_object.eval_type == 'categorical':
@@ -183,9 +185,10 @@ if __name__ == "__main__":
 
     # Parse command-line arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument('-i', '--source', type=str, required=True, help="Source of the model: sft|mid|rl")
+    parser.add_argument('-i', '--source', type=str, help="Source of the model: sft|mid|rl")
+    parser.add_argument('-p', '--custom_checkpoint', type=str, help="Custom checkpoint directory path (used when source='custom')")
     parser.add_argument('-a', '--task-name', type=str, default=None, help="Task name. Default = all tasks. Use | to split multiple tasks.")
-    parser.add_argument('-d', '--dtype', type=str, default='bfloat16', choices=['float32', 'bfloat16'])
+    parser.add_argument('-d', '--dtype', type=str, default='float32', choices=['float32', 'bfloat16'])
     parser.add_argument('-t', '--temperature', type=float, default=0.0)
     parser.add_argument('-m', '--max-new-tokens', type=int, default=512)
     parser.add_argument('-n', '--num-samples', type=int, default=1)
@@ -197,16 +200,24 @@ if __name__ == "__main__":
     parser.add_argument('--device-type', type=str, default='', choices=['cuda', 'cpu', 'mps'], help='Device type for evaluation: cuda|cpu|mps. empty => autodetect')
     args = parser.parse_args()
 
+    if args.custom_checkpoint is None:
+        raise ValueError("Custom checkpoint path must be provided when source='custom'")
+
     device_type = autodetect_device_type() if args.device_type == "" else args.device_type
     ddp, ddp_rank, ddp_local_rank, ddp_world_size, device = compute_init(device_type)
     ptdtype = torch.float32 if args.dtype == 'float32' else torch.bfloat16
     autocast_ctx = torch.amp.autocast(device_type=device_type, dtype=ptdtype) if device_type == "cuda" else nullcontext()
 
-    model, tokenizer, meta = load_model(args.source, device, phase="eval", model_tag=args.model_tag, step=args.step)
+    # Load model based on source
+    if args.custom_checkpoint is not None:
+        model, tokenizer, meta = load_custom_model(args.custom_checkpoint, device, phase="eval", model_tag=args.model_tag, step=args.step)
+    else:
+        model, tokenizer, meta = load_model(args.source, device, phase="eval", model_tag=args.model_tag, step=args.step)
+    
     engine = Engine(model, tokenizer)
 
     # Get the tasks to evaluate on
-    all_tasks = ['ARC-Easy', 'ARC-Challenge', 'MMLU', 'GSM8K', 'HumanEval', 'SpellingBee']
+    all_tasks = ['ARC-Easy', 'ARC-Challenge', 'MMLU', 'GSM8K', 'HumanEval', 'SpellingBee','AIME']
     baseline_accuracies = {
         'ARC-Easy': 0.25, # multiple choice 1 of 4 => 25%
         'ARC-Challenge': 0.25, # multiple choice 1 of 4 => 25%
@@ -214,6 +225,7 @@ if __name__ == "__main__":
         'GSM8K': 0.0, # open-ended => 0%
         'HumanEval': 0.0, # open-ended => 0%
         'SpellingBee': 0.0, # open-ended => 0%
+        'AIME': 0.0, # open-ended => 0%
     }
     task_names = all_tasks if args.task_name is None else args.task_name.split('|')
 
@@ -248,7 +260,7 @@ if __name__ == "__main__":
             centered_mean += centered_acc
         chatcore_metric = centered_mean / len(results)
         chatcore_metric_dict = {"ChatCORE metric": chatcore_metric}
-    get_report().log(section="Chat evaluation " + args.source, data=[
+    get_report().log(section="Chat evaluation " + (args.source or "custom"), data=[
         vars(args), # CLI args
         results,
         chatcore_metric_dict,

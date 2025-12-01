@@ -382,7 +382,10 @@ class RustBPETokenizer:
 def get_tokenizer():
     from nanochat.common import get_base_dir
     base_dir = get_base_dir()
-    tokenizer_dir = os.path.join(base_dir, "tokenizer")
+
+    # tokenizer_dir = os.path.join(base_dir, "tokenizer")
+    tokenizer_dir = "F:\\nanochat_d20\\nanochat"
+
     # return HuggingFaceTokenizer.from_directory(tokenizer_dir)
     return RustBPETokenizer.from_directory(tokenizer_dir)
 

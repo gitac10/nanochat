@@ -149,3 +149,13 @@ def load_model(source, *args, **kwargs):
     base_dir = get_base_dir()
     checkpoints_dir = os.path.join(base_dir, model_dir)
     return load_model_from_dir(checkpoints_dir, *args, **kwargs)
+
+# 新增：自定义模型加载函数
+def load_custom_model(checkpoint_dir, device, phase="eval", model_tag=None, step=None):
+    """加载自定义路径的模型"""
+    print(f"Loading custom model from: {checkpoint_dir}")
+    if not os.path.exists(checkpoint_dir):
+        raise FileNotFoundError(f"Checkpoint directory does not exist: {checkpoint_dir}")
+    
+    return load_model_from_dir(checkpoint_dir, device, phase, model_tag, step)
+

@@ -28,10 +28,10 @@ def timeout(duration, formula):
     def timeout_handler(signum, frame):
         raise Exception(f"'{formula}': timed out after {duration} seconds")
 
-    # signal.signal(signal.SIGALRM, timeout_handler)
-    # signal.alarm(duration)
+    signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(duration)
     yield
-    # signal.alarm(0)
+    signal.alarm(0)
 
 def eval_with_timeout(formula, max_time=3):
     try:
@@ -40,8 +40,7 @@ def eval_with_timeout(formula, max_time=3):
                 warnings.simplefilter("ignore", SyntaxWarning)
                 return eval(formula, {"__builtins__": {}}, {})
     except Exception as e:
-
-        # signal.alarm(0)
+        signal.alarm(0)
         print(f"Warning: Failed to eval {formula}, exception: {e}") # it's ok ignore wrong calculator usage
         return None
 
@@ -320,206 +319,6 @@ class Engine:
             if all(completed):
                 break
         return results, masks
-
-    def generate_batch_dynamic(self, prompts, max_tokens=None, temperature=1.0, top_k=None, seed=42):
-        """
-        动态批量推理 - 支持不同长度的prompts
-        
-        Args:
-            prompts: List of token sequences (List[List[int]])
-            max_tokens: 最大生成token数
-            temperature: 采样温度
-            top_k: top-k采样
-            seed: 随机种子
-            
-        Returns:
-            results: List of generated token sequences
-            masks: List of attention masks
-        """
-        assert isinstance(prompts, list) and len(prompts) > 0, "prompts must be a non-empty list"
-        assert all(isinstance(prompt, list) for prompt in prompts), "each prompt must be a list of ints"
-        
-        device = self.model.get_device()
-        rng = torch.Generator(device=device)
-        rng.manual_seed(seed)
-        
-        # 获取特殊token
-        get_special = lambda s: self.tokenizer.encode_special(s)
-        assistant_end = get_special("<|assistant_end|>")
-        bos = self.tokenizer.get_bos_token_id()
-        
-        batch_size = len(prompts)
-        
-        # 找到最长的序列用于padding
-        max_prompt_length = max(len(prompt) for prompt in prompts)
-        
-        # 创建padding后的输入序列
-        padded_ids = torch.full((batch_size, max_prompt_length), self.tokenizer.get_pad_token_id(), dtype=torch.long, device=device)
-        attention_mask = torch.zeros((batch_size, max_prompt_length), dtype=torch.long, device=device)
-        
-        for i, prompt in enumerate(prompts):
-            padded_ids[i, :len(prompt)] = torch.tensor(prompt, dtype=torch.long, device=device)
-            attention_mask[i, :len(prompt)] = 1
-        
-        # 预填充phase：处理所有prompts
-        m = self.model.config
-        kv_model_kwargs = {"num_heads": m.n_kv_head, "head_dim": m.n_embd // m.n_head, "num_layers": m.n_layer}
-        kv_cache = KVCache(
-            batch_size=batch_size,
-            seq_len=max_prompt_length,
-            **kv_model_kwargs,
-        )
-        
-        # 前向传播获取logits
-        logits = self.model.forward(padded_ids, kv_cache=kv_cache, attention_mask=attention_mask)
-        logits = logits[:, -1, :]  # (B, vocab_size) at last time step
-        
-        # 为每个prompt采样下一个token
-        next_ids = sample_next_token(logits, rng, temperature, top_k)  # (B, 1)
-        sampled_tokens = next_ids[:, 0].tolist()
-        
-        # 初始化结果和状态
-        results = [prompt.copy() for prompt in prompts]
-        completed = [False] * batch_size
-        
-        # 主生成循环
-        num_generated = 0
-        while True:
-            # 停止条件：达到最大token数
-            if max_tokens is not None and num_generated >= max_tokens:
-                break
-            # 停止条件：所有序列都已完成
-            if all(completed):
-                break
-            
-            # 准备当前token列（包含padding和真实的sampled tokens）
-            token_column = []
-            valid_batch_indices = []
-            
-            for i in range(batch_size):
-                if not completed[i]:
-                    valid_batch_indices.append(i)
-                    token_column.append(sampled_tokens[i])
-            
-            if not token_column:
-                break
-            
-            # 更新结果和状态
-            for i, token in zip(valid_batch_indices, token_column):
-                results[i].append(token)
-                if token == assistant_end or token == bos:
-                    completed[i] = True
-            
-            # 准备下次迭代的输入
-            if not all(completed):
-                # 创建新的padded输入
-                current_lengths = [len(results[i]) for i in valid_batch_indices]
-                current_max_length = max(current_lengths)
-                
-                new_padded_ids = torch.full((len(valid_batch_indices), current_max_length), 
-                                          self.tokenizer.get_pad_token_id(), dtype=torch.long, device=device)
-                new_attention_mask = torch.zeros((len(valid_batch_indices), current_max_length), 
-                                               dtype=torch.long, device=device)
-                
-                for j, i in enumerate(valid_batch_indices):
-                    new_padded_ids[j, :len(results[i])] = torch.tensor(results[i], dtype=torch.long, device=device)
-                    new_attention_mask[j, :len(results[i])] = 1
-                
-                # 前向传播
-                logits = self.model.forward(new_padded_ids, kv_cache=kv_cache, attention_mask=new_attention_mask)
-                logits = logits[:, -1, :]
-                
-                # 采样新tokens
-                next_ids = sample_next_token(logits, rng, temperature, top_k)
-                sampled_tokens = [0] * batch_size  # 重新初始化
-                for j, token in enumerate(next_ids[:, 0].tolist()):
-                    sampled_tokens[valid_batch_indices[j]] = token
-            
-            num_generated += 1
-        
-        return results
-
-    def batch_inference_api(self, inputs, batch_size=None, max_tokens=64, temperature=0.8, top_k=None, seed=42):
-        """
-        统一的batch推理API接口
-        
-        Args:
-            inputs: 可以是字符串列表、token列表、或混合
-            batch_size: 批处理大小，如果为None则使用动态batch
-            max_tokens: 最大生成token数
-            temperature: 采样温度
-            top_k: top-k采样
-            seed: 随机种子
-            
-        Returns:
-            dict: 包含生成的文本、tokens和性能统计
-        """
-        import time
-        start_time = time.time()
-        
-        # 处理输入：转换为token序列
-        if isinstance(inputs[0], str):
-            # 输入是字符串列表
-            prompts = []
-            for text in inputs:
-                bos_token = self.tokenizer.get_bos_token_id()
-                tokens = self.tokenizer.encode(text, prepend=bos_token)
-                prompts.append(tokens)
-        else:
-            # 输入已经是token序列
-            prompts = inputs
-        
-        if batch_size is None or batch_size >= len(prompts):
-            # 直接使用所有prompts进行batch推理
-            results = self.generate_batch_dynamic(prompts, max_tokens, temperature, top_k, seed)
-            texts = [self.tokenizer.decode(tokens) for tokens in results]
-            
-            inference_time = time.time() - start_time
-            total_tokens = sum(len(prompt) + len(result) for prompt, result in zip(prompts, results))
-            
-            return {
-                'texts': texts,
-                'tokens': results,
-                'prompts': prompts,
-                'batch_size': len(prompts),
-                'total_tokens': total_tokens,
-                'inference_time': inference_time,
-                'tokens_per_second': total_tokens / inference_time if inference_time > 0 else 0,
-                'throughput': len(prompts) / inference_time if inference_time > 0 else 0
-            }
-        else:
-            # 分批处理
-            all_texts = []
-            all_tokens = []
-            total_tokens = 0
-            total_time = 0
-            
-            for i in range(0, len(prompts), batch_size):
-                batch_prompts = prompts[i:i+batch_size]
-                batch_start = time.time()
-                
-                results = self.generate_batch_dynamic(batch_prompts, max_tokens, temperature, top_k, seed)
-                texts = [self.tokenizer.decode(tokens) for tokens in results]
-                
-                batch_time = time.time() - batch_start
-                batch_tokens = sum(len(prompt) + len(result) for prompt, result in zip(batch_prompts, results))
-                
-                all_texts.extend(texts)
-                all_tokens.extend(results)
-                total_tokens += batch_tokens
-                total_time += batch_time
-            
-            return {
-                'texts': all_texts,
-                'tokens': all_tokens,
-                'prompts': prompts,
-                'batch_size': batch_size,
-                'num_batches': (len(prompts) + batch_size - 1) // batch_size,
-                'total_tokens': total_tokens,
-                'inference_time': total_time,
-                'tokens_per_second': total_tokens / total_time if total_time > 0 else 0,
-                'throughput': len(prompts) / total_time if total_time > 0 else 0
-            }
 
 
 if __name__ == "__main__":

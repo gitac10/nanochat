@@ -34,8 +34,22 @@ class GPTConfig:
 
 
 def norm(x):
-    # Purely functional rmsnorm with no learnable params
-    return F.rms_norm(x, (x.size(-1),))
+
+    # # Purely functional rmsnorm with no learnable params
+    # return F.rms_norm(x, (x.size(-1),))
+    """
+    RMSNorm implementation with PyTorch version compatibility.
+    Uses F.rms_norm if available (PyTorch 2.0+), otherwise falls back to custom implementation.
+    """
+    if hasattr(torch.nn.functional, 'rms_norm'):
+        # PyTorch 2.0+ has built-in rms_norm
+        return torch.nn.functional.rms_norm(x, (x.size(-1),))
+    else:
+        # Fallback implementation for older PyTorch versions
+        # Calculate RMS and normalize
+        rms = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-12)
+        return x * rms
+
 
 
 def apply_rotary_emb(x, cos, sin):
@@ -88,11 +102,14 @@ class CausalSelfAttention(nn.Module):
         if kv_cache is None or Tq == Tk:
             # During training (no KV cache), attend as usual with causal attention
             # And even if there is KV cache, we can still use this simple version when Tq == Tk
-            y = F.scaled_dot_product_attention(q, k, v, is_causal=True, enable_gqa=enable_gqa)
+            # y = F.scaled_dot_product_attention(q, k, v, is_causal=True, enable_gqa=enable_gqa)
+            y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         elif Tq == 1:
             # During inference but with a single query in this forward pass:
             # The query has to attend to all the keys/values in the cache
-            y = F.scaled_dot_product_attention(q, k, v, is_causal=False, enable_gqa=enable_gqa)
+            # y = F.scaled_dot_product_attention(q, k, v, is_causal=False, enable_gqa=enable_gqa)
+            y = F.scaled_dot_product_attention(q, k, v, is_causal=False)
+            
         else:
             # During inference AND we have a chunk of queries in this forward pass:
             # First, each query attends to all the cached keys/values (i.e. full prefix)
