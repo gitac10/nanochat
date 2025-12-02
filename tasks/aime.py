@@ -1,13 +1,15 @@
 """
 AIME25评测任务：American Invitational Mathematics Examination 2025
-这是一个数学竞赛数据集，包含需要数值答案的数学问题，实现了对aime的评测
+这是一个数学竞赛数据集，包含需要数值答案的数学问题，实现了对aime24和25的评测
+实现了本地评测和api在线评测两种方式
 """
+
 
 import re
 import json
 from datasets import load_dataset
 from tasks.common import Task
-
+from openai import OpenAI
 
 class AIME(Task):
     """
@@ -23,119 +25,22 @@ class AIME(Task):
     - 支持多种子集和分割
     """
 
-    def __init__(self, subset, split, data_path=None, **kwargs):
+    def __init__(self, subset, split, data_path=None,dataset_type="aime25",use_llm = False, **kwargs):
         super().__init__(**kwargs)
         # AIME25只有主要的子集和标准分割
         assert subset in ["main", "train", "test"], "subset must be main|train|test"
         assert split in ["train", "dev", "test"], "split must be train|dev|test"
-        
-        # 加载AIME25数据集
-        self.data_path = data_path or "AIME25"  # 默认本地数据路径，支持 AIME25 目录
-        self.ds = self._load_data(subset, split)
-            
+        self.dataset_type = dataset_type
+        self.use_llm = use_llm
+        ##默认加载方式
+        self.ds = load_dataset("math-ai/aime25", split=split).shuffle(seed = 42)
+        # ##本地加载
+        # self.data_path = data_path or "D:/桌面/nanochat/AIME25/test.jsonl"  # 默认本地数据路径，支持 AIME25 目录
+        # self.ds = load_dataset("json", data_files = self.data_path, split="train").shuffle(seed=42) 
+        ##使用样例数据
+        # self.ds = self._create_sample_data(split) 
+
         print(f"Loaded AIME25 {subset}/{split}: {len(self.ds)} examples")
-        
-    def _load_data(self, subset, split):
-        """
-        智能数据加载：按优先级尝试不同数据源
-        1. 本地JSONL文件
-        2. 本地HuggingFace格式数据集
-        3. HuggingFace数据集
-        4. 示例数据（兜底）
-        """
-        import os
-        from datasets import load_from_disk, Dataset
-        
-        # 方法1：尝试从本地加载JSONL文件
-        local_data_path = self._get_local_data_path(subset, split)
-        if local_data_path and os.path.exists(local_data_path):
-            try:
-                print(f"Loading local data from: {local_data_path}")
-                
-                # 检查是否为JSONL文件
-                jsonl_files = []
-                if os.path.isdir(local_data_path):
-                    # 如果是目录，查找JSONL文件
-                    for file in os.listdir(local_data_path):
-                        if file.endswith('.jsonl'):
-                            jsonl_files.append(os.path.join(local_data_path, file))
-                elif local_data_path.endswith('.jsonl'):
-                    # 如果直接是JSONL文件
-                    jsonl_files = [local_data_path]
-                
-                if jsonl_files:
-                    print(f"Found JSONL files: {jsonl_files}")
-                    data = []
-                    for jsonl_file in jsonl_files:
-                        with open(jsonl_file, 'r', encoding='utf-8') as f:
-                            for line in f:
-                                if line.strip():
-                                    item = json.loads(line.strip())
-                                    # 标准化字段名：将 'question' 转换为 'problem'
-                                    if 'question' in item:
-                                        item['problem'] = item.pop('question')
-                                    data.append(item)
-                    
-                    if data:
-                        ds = Dataset.from_list(data)
-                        return ds.shuffle(seed=42)
-                
-                # 如果不是JSONL，尝试作为HuggingFace数据集加载
-                ds = load_from_disk(local_data_path)
-                return ds.shuffle(seed=42)
-                
-            except Exception as e:
-                print(f"Failed to load local data: {e}")
-        
-        # 方法2：尝试从HuggingFace加载
-        try:
-            print("Attempting to load from HuggingFace...")
-            ds = load_dataset("math-ai/aime25", subset, split=split)
-            return ds.shuffle(seed=42)
-        except Exception as e:
-            print(f"Failed to load from HuggingFace: {e}")
-        
-        # 方法3：使用示例数据（兜底）
-        print("Using sample data as fallback...")
-        return self._create_sample_data(split)
-    
-    def _get_local_data_path(self, subset, split):
-        """
-        生成本地数据路径
-        支持多种目录结构：
-        1. AIME25/ (目录形式，直接包含 JSONL 文件)
-        2. data/aime25/{subset}_{split}/
-        3. data/aime25/{split}/
-        4. 自定义路径/data_path/aime25/{subset}_{split}/
-        """
-        if not self.data_path:
-            return None
-            
-        import os
-        
-        # 尝试多种可能的路径结构
-        possible_paths = [
-            # 路径1: AIME25/ 目录形式（直接包含 JSONL 文件）
-            self.data_path,
-            # 路径2: data/aime25/train/
-            os.path.join(self.data_path, split),
-            # 路径3: data/aime25/train.parquet
-            os.path.join(self.data_path, f"{split}.parquet"),
-            # 路径4: data/aime25/main_train/
-            os.path.join(self.data_path, f"{subset}_{split}"),
-            # 路径5: data/aime25/main_train.parquet
-            os.path.join(self.data_path, f"{subset}_{split}.parquet"),
-            # 路径6: data/aime25/train-00000-of-00001.parquet
-            os.path.join(self.data_path, f"{split}-00000-of-00001.parquet"),
-        ]
-        
-        for path in possible_paths:
-            if os.path.exists(path):
-                print(f"Found local data at: {path}")
-                return path
-        
-        print(f"No local data found in: {self.data_path}")
-        return None
 
     def _create_sample_data(self, split):
         """创建AIME25示例数据（实际使用时应从真实数据集加载）"""
@@ -166,19 +71,12 @@ class AIME(Task):
             },
             {
                 "id": "AIME25_005",
-                "problem": "1 + 1 = ?",
+                "problem": "what is the sum of 1 + 1",
                 "answer": "2",
                 "solution": "1+1=2"
             }
         ]
-        
-        # 根据split返回不同大小的子集
-        if split == "train":
-            return sample_data[:3]  # 前3个用于训练
-        elif split == "dev":
-            return sample_data[3:4]  # 第4个用于验证
-        else:  # test
-            return sample_data[0:]  # 最后一个用于测试
+        return sample_data  
 
     @property
     def eval_type(self):
@@ -247,14 +145,27 @@ class AIME(Task):
         """
         row = self.ds[index]
         problem = row['problem']
-        reference_answer = str(row['answer'])
+        if self.dataset_type == 'aime25':
+            reference_answer = str(row['answer'])
+        else:
+            solution_text = str(row['solution'])
+            match = re.search(r'\\boxed\s*\{(\d+)\}', solution_text)
+            
+            # 2. 如果找到匹配项，使用括号内的数字；否则使用整个 solution 文本（作为兜底）
+            reference_answer = match.group(1) if match else solution_text.strip()
         
         # 构建对话格式
         # 用户发送数学问题，助手给出参考答案和解答过程
         messages = [
             {
                 "role": "user", 
-                "content": f"Solve this AIME mathematics problem:\n\n{problem}\n\nPlease provide your final numerical answer."
+                "content": (
+                    f"Solve the following mathematics problem:\n\n"
+                    f"{problem}\n\n"
+                    f"Please provide your complete step-by-step reasoning first. "
+                    f"Finally, state the numerical result immediately after the '###' marker."
+                )
+                # "content": f"Solve this mathematics problem:\n\n{problem}\n\n Remember to put your final answer after 'The answer is'."
             },
             {
                 "role": "assistant", 
@@ -282,98 +193,96 @@ class AIME(Task):
         Returns:
             int: 1表示正确，0表示错误
         """
-        # 提取真实答案和模型预测答案
-        true_answer = conversation['reference_answer']
-        predicted_answer = self.extract_answer(assistant_response)
-        print("*" * 30)
-        print(f"True answer: {true_answer}")
-        print(f"Predicted answer: {predicted_answer}")
-        print("*" * 30)
-        
-        # AIME答案通常是整数，进行数值比较
-        try:
-            true_num = int(true_answer)
-            pred_num = int(predicted_answer)
-            is_correct = 1 if true_num == pred_num else 0
-        except ValueError:
-            # 如果无法转换为整数，使用字符串比较
-            is_correct = 1 if predicted_answer.strip() == true_answer.strip() else 0
+        if self.use_llm:
+            client = OpenAI(
+                api_key="sk-gtaafqtnpyqqdwvjqvxmirkvmkudaaatkdqepyzarokoollm",
+                base_url="https://api.siliconflow.cn/v1/"
+            )
+
+            # 提取真实答案和模型预测答案
+            JUDGE_MODEL_NAME = "Qwen/Qwen3-32B" 
             
-        return is_correct
+            # 提取真实答案和模型预测答案
+            true_answer = conversation['reference_answer'].strip()
+            predicted_answer = self.extract_answer(assistant_response).strip()
+            
+            # 提取原始问题内容 (从对话消息中获取)
+            # 最后一个用户消息是实际问题
+            problem = conversation['messages'][-1]['content'] 
+            ##参考 opencompass 的判断模版，引入大模型进行判断
+            
+            GRADER_TEMPLATE = """
+                Please as a grading expert, judge whether the final answers given by the candidates below are consistent with the standard answers, that is, whether the candidates answered correctly. 
+                Here are some evaluation criteria:
+                1. Please refer to the given standard answer. You don't need to re-generate the answer to the question because the standard answer has been given. You only need to judge whether the candidate's answer is consistent with the standard answer according to the form of the question. THE STANDARD ANSWER IS ALWAYS CORRECT AND THE QUESTION IS PERFECTLY VALID. NEVER QUESTION THEM.
+                2. ONLY compare the FINAL ANSWER - COMPLETELY IGNORE any potential errors in the REASONING PROCESSES.
+                3. Some answers may be expressed in different ways, such as some answers may be a mathematical expression, some answers may be a textual description, as long as the meaning expressed is the same. Before making a judgment, please understand the question and the standard answer first, and then judge whether the candidate's answer is correct.
+                4. Some answers may consist of multiple items, such as multiple-choice questions, multiple-select questions, fill-in-the-blank questions, etc. Regardless of the question type, the final answer will be considered correct as long as it matches the standard answer, regardless of whether the reasoning process is correct. For multiple-select questions and multi-blank fill-in-the-blank questions, all corresponding options or blanks must be answered correctly and match the standard answer exactly to be deemed correct.
+                5. If the prediction is given with \\boxed{{}}, please ignore the \\boxed{{}} and only judge whether the candidate's answer is consistent with the standard answer.
+                6. If the candidate's answer is invalid (e.g., incomplete (cut off mid-response), lots of unnormal repetitive content, or irrelevant to the question, saying it can't answer the question because some irresistible factors, like ethical issues, no enough information, etc.), select option C (INVALID).Please judge whether the following answers are consistent with the standard answer based on the above criteria. Grade the predicted answer of this new question as one of:
+                A: CORRECT 
+                B: INCORRECT
+                C: INVALID
+                Just return the letters "A", "B", or "C", with no text around it.
+                Here is your task. Simply reply with either A, B, or C. Don't apologize or correct yourself if there was a mistake; we are just trying to grade the answer.
+                <Original Question Begin>:
+                {question}
+                <Original Question End>
+                <Standard Answer Begin>:
+                {answer}
+                <Standard Answer End>
+                <Candidate's Answer Begin>: 
+                {prediction}
+                <Candidate's Answer End>
+                Judging the correctness of the candidate's answer:
+                """
+            
+            # 3. 填充 Prompt
+            judge_prompt = GRADER_TEMPLATE.format(
+                question=problem,
+                answer=true_answer,
+                prediction=assistant_response
+            )
+            
+            is_correct = 0 # 默认错误
+            
+            try:
+                # 调用外部 API 服务进行裁判
+                judge_response = client.chat.completions.create(
+                    model=JUDGE_MODEL_NAME,
+                    messages=[{"role": "user", "content": judge_prompt}],
+                    temperature=0.0,
+                    max_tokens=20
+                )
+                
+                judge_text = judge_response.choices[0].message.content.strip().upper()
+                # 根据裁判模型的回复判断结果
+                if "A" == judge_text:
+                    is_correct = 1
+                    
+            except Exception as e:
+                # API 调用失败，直接返回 0 (错误)，不进行任何回退。
+                print(f"⚠️ 裁判 API 调用失败: {e}. 返回 0。")
+                is_correct = 0
+                
+            print("大模型评判成功，判断结果为:", judge_text)
+            return is_correct
+        ##本地评判
+        else:
+        
+            true_answer = conversation['reference_answer']
+            predicted_answer = self.extract_answer(assistant_response)
+            # AIME答案通常是整数，进行数值比较
+            try:
+                true_num = int(true_answer)
+                pred_num = int(predicted_answer)
+                is_correct = 1 if true_num == pred_num else 0
+            except ValueError:
+                # 如果无法转换为整数，使用字符串比较
+                is_correct = 1 if predicted_answer.strip() == true_answer.strip() else 0
+                
+            return is_correct
 
     def reward(self, conversation, assistant_response):
-        """
-        强化学习奖励函数
-        
-        对于AIME问题，提供更细粒度的奖励：
-        - 完全正确：1.0
-        - 部分正确（数值相近但不完全正确）：0.5
-        - 错误：0.0
-        
-        Args:
-            conversation (dict): 对话上下文
-            assistant_response (str): 模型回答
-            
-        Returns:
-            float: 奖励分数 (0.0-1.0)
-        """
-        true_answer = conversation['reference_answer']
-        predicted_answer = self.extract_answer(assistant_response)
-        
-        try:
-            true_num = int(true_answer)
-            pred_num = int(predicted_answer)
-            
-            if true_num == pred_num:
-                return 1.0
-            elif abs(true_num - pred_num) <= 1:  # 允许±1的误差
-                return 0.5
-            else:
-                return 0.0
-        except ValueError:
-            return 0.0
+        return float(self.evaluate(conversation, assistant_response))
 
-
-class AIME25WithSteps(AIME):
-    """
-    AIME25变体：需要展示解题步骤的版本
-    
-    这个版本评估模型不仅答案要正确，还需要展示合理的解题步骤
-    """
-    
-    def evaluate(self, conversation, assistant_response):
-        """
-        增强评估：同时检查答案正确性和解题步骤的合理性
-        
-        Args:
-            conversation (dict): 对话上下文
-            assistant_response (str): 模型回答
-            
-        Returns:
-            int: 1表示答案和步骤都正确，0表示其他情况
-        """
-        true_answer = conversation['reference_answer']
-        predicted_answer = self.extract_answer(assistant_response)
-        
-        # 检查答案是否正确
-        try:
-            true_num = int(true_answer)
-            pred_num = int(predicted_answer)
-            answer_correct = (true_num == pred_num)
-        except ValueError:
-            answer_correct = (predicted_answer.strip() == true_answer.strip())
-        
-        # 检查解题步骤（简单检查：回答是否包含数学运算关键词）
-        math_keywords = ['add', 'subtract', 'multiply', 'divide', '+', '-', '×', '÷', 
-                        '加', '减', '乘', '除', '计算', '解', 'solve', 'calculate',
-                        '因为', '所以', 'thus', 'therefore', 'hence']
-        
-        has_steps = any(keyword in assistant_response.lower() for keyword in math_keywords)
-        
-        # 完整评估：答案正确且有解题步骤
-        if answer_correct and has_steps:
-            return 1
-        elif answer_correct:  # 答案正确但缺少步骤
-            return 1  # AIME主要关注最终答案
-        else:
-            return 0

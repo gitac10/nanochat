@@ -39,7 +39,6 @@ def run_generative_eval(task_object, tokenizer, model, engine, num_samples, max_
     num_passed, total = 0, 0
     for i in range(ddp_rank, num_problems, ddp_world_size):
         conversation = task_object[i]
-
         # Tokenize the prompt
         encoded_prompt = tokenizer.render_for_completion(conversation)
         # Get the completions
@@ -167,7 +166,7 @@ def run_chat_eval(task_name, model, tokenizer, engine,
         'ARC-Challenge': partial(ARC, subset="ARC-Challenge", split="test"),
         'GSM8K': partial(GSM8K, subset="main", split="test"),
         'SpellingBee': partial(SpellingBee, size=256, split="test"),
-        'AIME': partial(AIME, subset="main", split="test"),
+        'AIME': partial(AIME, subset="main", split="test",dataset_type=args.dataset_type,use_llm=args.use_llm),
     }[task_name]
     task_object = task_module()
     # Run the evaluation
@@ -186,18 +185,21 @@ if __name__ == "__main__":
     # Parse command-line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--source', type=str, help="Source of the model: sft|mid|rl")
-    parser.add_argument('-p', '--custom_checkpoint', type=str, help="Custom checkpoint directory path (used when source='custom')")
-    parser.add_argument('-a', '--task-name', type=str, default=None, help="Task name. Default = all tasks. Use | to split multiple tasks.")
+    parser.add_argument('-p', '--custom_checkpoint', type=str, default="F:\\nanochat_d20\\", help="Custom checkpoint directory path (used when source='custom')")
+    parser.add_argument('-a', '--task-name', type=str, default='AIME', help="Task name. Default = all tasks. Use | to split multiple tasks.")
     parser.add_argument('-d', '--dtype', type=str, default='float32', choices=['float32', 'bfloat16'])
     parser.add_argument('-t', '--temperature', type=float, default=0.0)
-    parser.add_argument('-m', '--max-new-tokens', type=int, default=512)
+    parser.add_argument('-m', '--max-new-tokens', type=int, default=2048)
     parser.add_argument('-n', '--num-samples', type=int, default=1)
     parser.add_argument('-k', '--top-k', type=int, default=50)
-    parser.add_argument('-b', '--batch-size', type=int, default=8, help='Batch size for categorical evaluation')
+    parser.add_argument('-b', '--batch-size', type=int, default=1, help='Batch size for categorical evaluation')
     parser.add_argument('-g', '--model-tag', type=str, default=None, help='Model tag to load')
     parser.add_argument('-s', '--step', type=int, default=None, help='Step to load')
     parser.add_argument('-x', '--max-problems', type=int, default=None, help='Max problems to evaluate')
     parser.add_argument('--device-type', type=str, default='', choices=['cuda', 'cpu', 'mps'], help='Device type for evaluation: cuda|cpu|mps. empty => autodetect')
+    parser.add_argument('--dataset-type', type=str, default='aime25', choices=['aime25', 'aime24'], help='Dataset type for AIME evaluation: aime25|aime20')
+    parser.add_argument('-u', '--use_llm', type=bool, default=False)
+    
     args = parser.parse_args()
 
     if args.custom_checkpoint is None:
@@ -208,6 +210,9 @@ if __name__ == "__main__":
     ptdtype = torch.float32 if args.dtype == 'float32' else torch.bfloat16
     autocast_ctx = torch.amp.autocast(device_type=device_type, dtype=ptdtype) if device_type == "cuda" else nullcontext()
 
+    dataset_type = args.dataset_type
+    use_llm = args.use_llm
+    
     # Load model based on source
     if args.custom_checkpoint is not None:
         model, tokenizer, meta = load_custom_model(args.custom_checkpoint, device, phase="eval", model_tag=args.model_tag, step=args.step)
