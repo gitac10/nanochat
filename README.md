@@ -42,7 +42,7 @@ This repo is a full-stack implementation of an LLM like ChatGPT in a single, cle
   - 准确率：0%
 
 ### 注意事项
-- 为了使用Open AI 调用API接口进行评估，需要先在Open AI 平台注册账号并获取API密钥。
+- 为了调用API接口进行评估，需要先在各类平台注册账号并获取API密钥。
 - 为了使用自定义模型检查点，需要先在huggingface或魔搭等社区下载模型并保存检查点。
 
 ### 参考
