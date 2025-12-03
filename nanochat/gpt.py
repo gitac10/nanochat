@@ -40,6 +40,7 @@ def norm(x):
     """
     RMSNorm implementation with PyTorch version compatibility.
     Uses F.rms_norm if available (PyTorch 2.0+), otherwise falls back to custom implementation.
+    本地环境暂时不支持，采用了手动实现 norm计算
     """
     if hasattr(torch.nn.functional, 'rms_norm'):
         # PyTorch 2.0+ has built-in rms_norm
@@ -103,11 +104,13 @@ class CausalSelfAttention(nn.Module):
             # During training (no KV cache), attend as usual with causal attention
             # And even if there is KV cache, we can still use this simple version when Tq == Tk
             # y = F.scaled_dot_product_attention(q, k, v, is_causal=True, enable_gqa=enable_gqa)
+            # windows下不支持，暂时注释enable_gqa=enable_gqa
             y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         elif Tq == 1:
             # During inference but with a single query in this forward pass:
             # The query has to attend to all the keys/values in the cache
             # y = F.scaled_dot_product_attention(q, k, v, is_causal=False, enable_gqa=enable_gqa)
+            # windows下不支持，暂时注释enable_gqa=enable_gqa
             y = F.scaled_dot_product_attention(q, k, v, is_causal=False)
             
         else:

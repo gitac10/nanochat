@@ -8,6 +8,7 @@ import torch.distributed as dist
 
 
 # @torch.compile
+# windows下不支持，暂时注释
 
 def zeropower_via_newtonschulz5(G: Tensor, steps: int) -> Tensor:
     """
