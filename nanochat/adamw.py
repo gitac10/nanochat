@@ -19,6 +19,7 @@ class DistAdamW(torch.optim.Optimizer):
 
 
     # @torch.compile
+    # windows下当前环境不支持，暂时注释
     @torch.no_grad()
     def step(self):
         rank = dist.get_rank()

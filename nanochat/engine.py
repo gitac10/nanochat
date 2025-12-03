@@ -28,6 +28,7 @@ def timeout(duration, formula):
     def timeout_handler(signum, frame):
         raise Exception(f"'{formula}': timed out after {duration} seconds")
 
+    ##windows环境下不支持，暂时注释
     # signal.signal(signal.SIGALRM, timeout_handler)
     # signal.alarm(duration)
     yield
@@ -42,6 +43,7 @@ def eval_with_timeout(formula, max_time=3):
     except Exception as e:
 
         # signal.alarm(0)
+        ##windows环境下不支持，暂时注释
         print(f"Warning: Failed to eval {formula}, exception: {e}") # it's ok ignore wrong calculator usage
         return None
 
