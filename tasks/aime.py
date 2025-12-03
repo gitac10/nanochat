@@ -105,7 +105,13 @@ class AIME(Task):
         Returns:
             str: 提取的答案字符串
         """
-        # 方法1：寻找答案标签格式 "答案是 X" 或 "answer is X"
+        # 方法1：尝试提取#### 后的数值
+        marker_pattern = r"#### (\-?[0-9\.\,]+)"
+        marker_match = re.search(marker_pattern, text)
+        if marker_match:
+            return marker_match.group(1)
+        
+        # 方法2：寻找答案标签格式 "答案是 X" 或 "answer is X"
         answer_patterns = [
             r'答案是\s*(\d+)',
             r'answer is\s*(\d+)',
@@ -119,17 +125,10 @@ class AIME(Task):
             if match:
                 return match.group(1)
         
-        # 方法2：寻找最后一个出现的数字（适用于纯数字答案）
+        # 方法3：寻找最后一个出现的数字（适用于纯数字答案）
         numbers = re.findall(r'\d+', text)
         if numbers:
             return numbers[-1]  # 返回最后一个数字
-        
-        # 方法3：尝试提取框起来的答案 [[answer]] 格式
-        boxed_pattern = r'\[\[(\d+)\]\]'
-        boxed_match = re.search(boxed_pattern, text)
-        if boxed_match:
-            return boxed_match.group(1)
-            
         # 如果都无法提取，返回原文本
         return text.strip()
 
@@ -163,7 +162,7 @@ class AIME(Task):
                     f"Solve the following mathematics problem:\n\n"
                     f"{problem}\n\n"
                     f"Please provide your complete step-by-step reasoning first. "
-                    f"Finally, state the numerical result immediately after the '###' marker."
+                    f"Finally, state the numerical result immediately after the '####' marker."
                 )
                 # "content": f"Solve this mathematics problem:\n\n{problem}\n\n Remember to put your final answer after 'The answer is'."
             },
